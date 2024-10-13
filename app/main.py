@@ -216,4 +216,9 @@ def proxy(u, allow_redirects=False):
 
 app.debug = True
 if __name__ == '__main__':
+    try:
+        index_html = requests.get(ASSET_URL, timeout=10).text
+        icon_r = requests.get(ASSET_URL + '/favicon.ico', timeout=10).content
+    except BaseException:
+        pass
     app.run(host=HOST, port=PORT)
