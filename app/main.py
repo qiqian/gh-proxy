@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 import re
-
+import os
 import requests
-from flask import Flask, Response, redirect, request
+from flask import Flask, Response, redirect, request, send_file
 from requests.exceptions import (
     ChunkedEncodingError,
     ContentDecodingError, ConnectionError, StreamConsumedError)
@@ -32,7 +32,7 @@ black_list = '''
 pass_list = '''
 '''
 
-HOST = '127.0.0.1'  # 监听地址，建议监听本地然后由web服务器反代
+HOST = '0.0.0.0'  # 监听地址，建议监听本地然后由web服务器反代
 PORT = 80  # 监听端口
 ASSET_URL = 'https://hunshcn.github.io/gh-proxy'  # 主页
 
@@ -41,8 +41,8 @@ black_list = [tuple([x.replace(' ', '') for x in i.split('/')]) for i in black_l
 pass_list = [tuple([x.replace(' ', '') for x in i.split('/')]) for i in pass_list.split('\n') if i]
 app = Flask(__name__)
 CHUNK_SIZE = 1024 * 10
-index_html = requests.get(ASSET_URL, timeout=10).text
-icon_r = requests.get(ASSET_URL + '/favicon.ico', timeout=10).content
+index_html = ""#requests.get(ASSET_URL, timeout=10).text
+icon_r = ""#requests.get(ASSET_URL + '/favicon.ico', timeout=10).content
 exp1 = re.compile(r'^(?:https?://)?github\.com/(?P<author>.+?)/(?P<repo>.+?)/(?:releases|archive)/.*$')
 exp2 = re.compile(r'^(?:https?://)?github\.com/(?P<author>.+?)/(?P<repo>.+?)/(?:blob|raw)/.*$')
 exp3 = re.compile(r'^(?:https?://)?github\.com/(?P<author>.+?)/(?P<repo>.+?)/(?:info|git-).*$')
@@ -70,8 +70,10 @@ def iter_content(self, chunk_size=1, decode_unicode=False):
     def generate():
         # Special case for urllib3.
         if hasattr(self.raw, 'stream'):
+            #print("download...\n")
             try:
                 for chunk in self.raw.stream(chunk_size, decode_content=False):
+                    #print("chunk = ", type(chunk))
                     yield chunk
             except ProtocolError as e:
                 raise ChunkedEncodingError(e)
@@ -80,6 +82,7 @@ def iter_content(self, chunk_size=1, decode_unicode=False):
             except ReadTimeoutError as e:
                 raise ConnectionError(e)
         else:
+            #print("from file...\n")
             # Standard file-like object.
             while True:
                 chunk = self.raw.read(chunk_size)
@@ -174,9 +177,23 @@ def proxy(u, allow_redirects=False):
         if 'Content-length' in r.headers and int(r.headers['Content-length']) > size_limit:
             return redirect(u + request.url.replace(request.base_url, '', 1))
 
-        def generate():
-            for chunk in iter_content(r, chunk_size=CHUNK_SIZE):
-                yield chunk
+        has_fname = False
+        fname = ".___.__._."
+        if 'content-disposition' in r.headers:
+            d = r.headers['content-disposition']
+            #print(r.headers)
+            fname = re.findall("filename=(.+)", d)[0]
+            #print("url= ", r.url, "\nname = ", fname, "\n")
+            has_fname = True
+
+        def generate(fpath):
+            with open(fpath + ".downloading", 'wb') as fd:
+                for chunk in iter_content(r, chunk_size=CHUNK_SIZE):
+                    #print("type ", type(chunk))
+                    fd.write(chunk)
+                    yield chunk
+            os.rename(fpath + ".downloading", fpath)
+
 
         if 'Location' in r.headers:
             _location = r.headers.get('Location')
@@ -185,7 +202,14 @@ def proxy(u, allow_redirects=False):
             else:
                 return proxy(_location, True)
 
-        return Response(generate(), headers=headers, status=r.status_code)
+        fpath = "/tank/gh-proxy/" + fname
+        if has_fname and os.path.isfile(fpath):
+            print("send cached file ", fpath)
+            return send_file(fpath, as_attachment=False)
+        else:
+            if has_fname:
+                print("download file ", fname)
+            return Response(generate(fpath), headers=headers, status=r.status_code)
     except Exception as e:
         headers['content-type'] = 'text/html; charset=UTF-8'
         return Response('server error ' + str(e), status=500, headers=headers)
